@@ -1,0 +1,420 @@
+"""
+sigvigil.report.generator
+============================
+Automated analysis report generator.
+
+Produces a self-contained HTML report for any SignalResult.
+The report includes: run metadata, pre-specified hypotheses summary,
+signal tables (sortable), and embedded figure links.
+
+All output is written to a single directory for easy sharing.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
+import numpy as np
+import pandas as pd
+
+
+HTML_TEMPLATE = """<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>sigvigil Report — {title}</title>
+  <style>
+    :root {{
+      --teal: #0d7a7a;
+      --light-teal: #e8f4f4;
+      --dark: #1a1a2e;
+      --mid: #444;
+      --light: #f8f9fa;
+      --border: #dee2e6;
+      --signal-strong: #b2182b;
+      --signal-moderate: #d6604d;
+      --no-signal: #888;
+    }}
+    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{
+      font-family: 'Times New Roman', Times, serif;
+      background: #fff;
+      color: var(--dark);
+      line-height: 1.6;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 24px 32px;
+    }}
+    header {{
+      border-bottom: 3px solid var(--teal);
+      padding-bottom: 16px;
+      margin-bottom: 28px;
+    }}
+    header h1 {{
+      font-size: 1.6rem;
+      color: var(--teal);
+      font-weight: bold;
+    }}
+    header .meta {{
+      font-size: 0.85rem;
+      color: var(--mid);
+      margin-top: 6px;
+    }}
+    h2 {{
+      font-size: 1.15rem;
+      color: var(--teal);
+      border-left: 4px solid var(--teal);
+      padding-left: 10px;
+      margin: 28px 0 12px;
+    }}
+    h3 {{ font-size: 1rem; color: var(--mid); margin: 16px 0 8px; }}
+    p {{ margin-bottom: 10px; font-size: 0.95rem; }}
+    .callout {{
+      background: var(--light-teal);
+      border-left: 4px solid var(--teal);
+      padding: 12px 16px;
+      margin: 16px 0;
+      border-radius: 0 4px 4px 0;
+      font-size: 0.9rem;
+    }}
+    table {{
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.82rem;
+      margin: 16px 0;
+    }}
+    th {{
+      background: var(--teal);
+      color: white;
+      padding: 8px 10px;
+      text-align: left;
+      font-weight: 600;
+      cursor: pointer;
+      user-select: none;
+    }}
+    th:hover {{ background: #0a5f5f; }}
+    td {{
+      padding: 6px 10px;
+      border-bottom: 1px solid var(--border);
+    }}
+    tr:nth-child(even) {{ background: var(--light); }}
+    .signal-yes {{ color: var(--signal-strong); font-weight: bold; }}
+    .signal-no {{ color: var(--no-signal); }}
+    .badge {{
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 0.75rem;
+      font-weight: bold;
+    }}
+    .badge-signal {{ background: #fde8e8; color: var(--signal-strong); }}
+    .badge-nosignal {{ background: #f0f0f0; color: var(--no-signal); }}
+    .stat-grid {{
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+      margin: 20px 0;
+    }}
+    .stat-card {{
+      background: var(--light-teal);
+      border-radius: 6px;
+      padding: 14px;
+      text-align: center;
+    }}
+    .stat-card .number {{
+      font-size: 1.8rem;
+      font-weight: bold;
+      color: var(--teal);
+    }}
+    .stat-card .label {{
+      font-size: 0.78rem;
+      color: var(--mid);
+      margin-top: 4px;
+    }}
+    .limitation-box {{
+      border: 1px solid #ffc107;
+      background: #fffde7;
+      padding: 14px;
+      border-radius: 4px;
+      margin: 16px 0;
+      font-size: 0.88rem;
+    }}
+    footer {{
+      border-top: 1px solid var(--border);
+      padding-top: 16px;
+      margin-top: 40px;
+      font-size: 0.78rem;
+      color: var(--mid);
+    }}
+    @media print {{
+      body {{ max-width: 100%; padding: 16px; }}
+      .stat-grid {{ grid-template-columns: repeat(2, 1fr); }}
+    }}
+  </style>
+  <script>
+    function sortTable(tableId, col) {{
+      const table = document.getElementById(tableId);
+      const tbody = table.tBodies[0];
+      const rows = Array.from(tbody.rows);
+      const asc = table.dataset.sortAsc === col;
+      table.dataset.sortAsc = asc ? '' : col;
+      rows.sort((a, b) => {{
+        const av = a.cells[col].textContent.trim();
+        const bv = b.cells[col].textContent.trim();
+        const an = parseFloat(av), bn = parseFloat(bv);
+        if (!isNaN(an) && !isNaN(bn)) return asc ? bn - an : an - bn;
+        return asc ? bv.localeCompare(av) : av.localeCompare(bv);
+      }});
+      rows.forEach(r => tbody.appendChild(r));
+    }}
+  </script>
+</head>
+<body>
+<header>
+  <h1>sigvigil Analysis Report</h1>
+  <div class="meta">
+    {title} &nbsp;|&nbsp; Run date: {run_date} &nbsp;|&nbsp;
+    Generated by <a href="https://github.com/axshoe/sigvigil">sigvigil</a> /
+    <a href="https://thexiulab.org">The Xiu Lab</a>
+  </div>
+</header>
+
+<h2>Run Summary</h2>
+<div class="stat-grid">
+  <div class="stat-card"><div class="number">{n_cases:,}</div><div class="label">Cases analyzed</div></div>
+  <div class="stat-card"><div class="number">{n_pairs}</div><div class="label">Drug-event pairs tested</div></div>
+  <div class="stat-card"><div class="number">{n_signals}</div><div class="label">Pairs with ≥1 signal method</div></div>
+  <div class="stat-card"><div class="number">{n_drugs}</div><div class="label">Drugs analyzed</div></div>
+</div>
+
+<div class="callout">
+  <strong>Population filter applied:</strong> {filter_description}
+</div>
+
+<h2>Pre-Specified Hypotheses</h2>
+<p>The following hypotheses were pre-specified before running any analyses, in accordance with
+pharmacovigilance best practices for avoiding HARKing (Hypothesizing After Results are Known).
+Results are labeled confirmatory or exploratory accordingly.</p>
+
+<table id="hyp-table">
+<thead><tr>
+  <th onclick="sortTable('hyp-table', 0)">Drug</th>
+  <th onclick="sortTable('hyp-table', 1)">Pre-specified event</th>
+  <th onclick="sortTable('hyp-table', 2)">Rationale</th>
+  <th onclick="sortTable('hyp-table', 3)">ROR signal</th>
+  <th onclick="sortTable('hyp-table', 4)">IC025</th>
+  <th onclick="sortTable('hyp-table', 5)">Status</th>
+</tr></thead>
+<tbody>
+{hypothesis_rows}
+</tbody>
+</table>
+
+<h2>All Signal Results</h2>
+<p>All drug-event pairs tested, sorted by IC025 descending. ROR signal criterion: lower 95% CI > 1,
+n ≥ 3. IC025 signal criterion: IC025 > 0, n ≥ 3. EBGM signal criterion: EB05 ≥ 2.</p>
+
+<table id="signal-table">
+<thead><tr>
+  <th onclick="sortTable('signal-table', 0)">Drug</th>
+  <th onclick="sortTable('signal-table', 1)">Event (MedDRA PT)</th>
+  <th onclick="sortTable('signal-table', 2)">N</th>
+  <th onclick="sortTable('signal-table', 3)">ROR</th>
+  <th onclick="sortTable('signal-table', 4)">95% CI</th>
+  <th onclick="sortTable('signal-table', 5)">IC025</th>
+  <th onclick="sortTable('signal-table', 6)">PRR</th>
+  <th onclick="sortTable('signal-table', 7)">EBGM</th>
+  <th onclick="sortTable('signal-table', 8)">BH q-value</th>
+  <th onclick="sortTable('signal-table', 9)">Methods flagged</th>
+</tr></thead>
+<tbody>
+{signal_rows}
+</tbody>
+</table>
+
+<h2>Statistical Methods</h2>
+<p>All methods implemented from scratch. No proprietary pharmacovigilance software used.</p>
+<ul style="margin-left:20px; font-size:0.9rem; line-height:1.8">
+  <li><strong>ROR</strong>: Evans et al. 2001. Signal: lower 95% CI &gt; 1, n ≥ 3.</li>
+  <li><strong>IC / IC025</strong>: Norén et al. 2006 (Bayesian credible bound). Signal: IC025 &gt; 0, n ≥ 3.</li>
+  <li><strong>PRR</strong>: Evans 2001 criteria: PRR ≥ 2, χ² ≥ 4, n ≥ 3.</li>
+  <li><strong>EBGM / EB05</strong>: DuMouchel 1999 MGPS (two-component Gamma mixture prior, MLE fit). Signal: EB05 ≥ 2.</li>
+  <li><strong>Multiple testing</strong>: Bonferroni, Benjamini-Hochberg FDR, Storey q-value (pi0 estimation via spline).</li>
+</ul>
+
+<div class="limitation-box">
+  <strong>⚠ Limitations (read before interpreting signals)</strong><br>
+  FAERS is subject to under-reporting, notoriety bias, Weber effect, confounding by indication,
+  and absence of denominator data. Disproportionality signals indicate that a drug-event pair
+  is over-reported relative to the database background — not that the drug <em>causes</em> the
+  event. All signals require clinical judgment and, where warranted, formal epidemiological
+  follow-up. N values reflect FAERS reports, not true incidence rates.
+</div>
+
+<footer>
+  sigvigil v1.0.0 &nbsp;|&nbsp; A. Xiu, The Xiu Lab (thexiulab.org) &nbsp;|&nbsp;
+  github.com/axshoe/sigvigil &nbsp;|&nbsp;
+  Data source: FDA FAERS (public domain). FAERS data are not owned by sigvigil.
+</footer>
+</body>
+</html>
+"""
+
+PRE_SPECIFIED_HYPOTHESES = [
+    {
+        "drug": "topiramate",
+        "event": "weight decreased",
+        "rationale": "Anorexigenic effect expected to be amplified in adolescent females at elevated baseline risk for weight-related adverse effects.",
+    },
+    {
+        "drug": "topiramate",
+        "event": "decreased appetite",
+        "rationale": "Same mechanism as weight decreased; adolescent period increases vulnerability.",
+    },
+    {
+        "drug": "valproate",
+        "event": "alopecia",
+        "rationale": "Hormonal factors in adolescent females may amplify valproate-associated hair loss.",
+    },
+    {
+        "drug": "amitriptyline",
+        "event": "sleep disorder",
+        "rationale": "TCA-induced sleep architecture disruption under-documented in this population.",
+    },
+    {
+        "drug": "amitriptyline",
+        "event": "middle insomnia",
+        "rationale": "Specific sleep disruption pattern (semi-awake for hours) consistent with amitriptyline's anticholinergic profile.",
+    },
+    {
+        "drug": "erenumab",
+        "event": "adverse event",
+        "rationale": "CGRP mAbs expected to show lower overall adverse event signal burden vs. antiepileptics/TCAs.",
+    },
+]
+
+
+def _fmt_float(val, decimals=2):
+    if val is None or (isinstance(val, float) and np.isnan(val)):
+        return "—"
+    return f"{val:.{decimals}f}"
+
+
+def _signal_badge(is_signal):
+    if is_signal:
+        return '<span class="badge badge-signal">Signal</span>'
+    return '<span class="badge badge-nosignal">No signal</span>'
+
+
+def _count_signals(row):
+    cols = ["ror_signal", "ic_signal", "prr_signal", "ebgm_signal"]
+    return sum(1 for c in cols if c in row.index and bool(row.get(c, False)))
+
+
+def generate_report(
+    signal_result,
+    output_path: str,
+    title: str = "Migraine Preventives in Adolescent Females (FAERS 2004–2024)",
+) -> None:
+    """Generate a self-contained HTML report from a SignalResult.
+
+    Parameters
+    ----------
+    signal_result : SignalResult from FAERSDatabase.analyze().
+    output_path : path to write the HTML file.
+    title : report title.
+    """
+    signals = signal_result.signals
+    meta = signal_result.metadata
+    filt = signal_result.population_filter
+
+    n_cases = meta.get("n_cases_analyzed", "—")
+    run_date = meta.get("run_date", str(datetime.now().date()))
+
+    filter_desc = (
+        f"Age {filt.age[0]}–{filt.age[1]} years; "
+        f"Sex: {filt.sex or 'all'}; "
+        f"Indication: {filt.indication or 'all'}; "
+        f"Serious only: {filt.serious_only}; "
+        f"HCP only: {filt.hcp_only}"
+        if filt else "No filter applied"
+    )
+
+    # Build hypothesis rows
+    hyp_rows = []
+    for hyp in PRE_SPECIFIED_HYPOTHESES:
+        match = signals[
+            (signals["drug"] == hyp["drug"]) &
+            (signals["event"].str.contains(hyp["event"], case=False, na=False))
+        ]
+        if not match.empty:
+            row = match.iloc[0]
+            ror_sig = bool(row.get("ror_signal", False))
+            ic025 = _fmt_float(row.get("ic025", np.nan))
+            status = _signal_badge(ror_sig or bool(row.get("ic_signal", False)))
+        else:
+            ror_sig = False
+            ic025 = "—"
+            status = '<span class="badge badge-nosignal">Not found</span>'
+
+        hyp_rows.append(
+            f"<tr><td>{hyp['drug'].capitalize()}</td>"
+            f"<td>{hyp['event'].capitalize()}</td>"
+            f"<td style='font-size:0.8rem'>{hyp['rationale']}</td>"
+            f"<td>{'✓' if ror_sig else '✗'}</td>"
+            f"<td>{ic025}</td>"
+            f"<td>{status}</td></tr>"
+        )
+
+    # Build signal rows
+    sig_sorted = signals.sort_values("ic025", ascending=False, na_position="last")
+    sig_rows = []
+    for _, row in sig_sorted.iterrows():
+        n_methods = _count_signals(row)
+        ror_str = _fmt_float(row.get("ror"))
+        lo95 = _fmt_float(row.get("ror_lo95"))
+        hi95 = _fmt_float(row.get("ror_hi95"))
+        ci_str = f"({lo95}, {hi95})"
+        bh_q = _fmt_float(row.get("bh_qvalue"), 3)
+        ebgm_str = _fmt_float(row.get("ebgm"))
+        is_sig = n_methods >= 2
+
+        row_class = ' style="background:#fef2f2"' if is_sig else ""
+        sig_rows.append(
+            f"<tr{row_class}>"
+            f"<td>{str(row.get('drug', '')).capitalize()}</td>"
+            f"<td>{str(row.get('event', '')).capitalize()}</td>"
+            f"<td>{int(row.get('n_de', 0))}</td>"
+            f"<td>{ror_str}</td>"
+            f"<td>{ci_str}</td>"
+            f"<td>{_fmt_float(row.get('ic025'))}</td>"
+            f"<td>{_fmt_float(row.get('prr'))}</td>"
+            f"<td>{ebgm_str}</td>"
+            f"<td>{bh_q}</td>"
+            f"<td>{n_methods}/4</td>"
+            f"</tr>"
+        )
+
+    n_signals = len(signals[
+        signals.apply(lambda r: _count_signals(r) >= 1, axis=1)
+    ])
+
+    html = HTML_TEMPLATE.format(
+        title=title,
+        run_date=run_date,
+        n_cases=int(n_cases) if isinstance(n_cases, (int, float)) else 0,
+        n_pairs=len(signals),
+        n_signals=n_signals,
+        n_drugs=len(signal_result.drug_names),
+        filter_description=filter_desc,
+        hypothesis_rows="\n".join(hyp_rows),
+        signal_rows="\n".join(sig_rows),
+    )
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(html)

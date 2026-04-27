@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sigvigil"
+version = "1.0.0"
+description = "Systematic pharmacovigilance signal analysis of migraine preventives in adolescent females — MSOF Project 3"
+authors = [{name = "Angie Xiu"}]
+requires-python = ">=3.9"
+dependencies = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "scipy>=1.10",
+    "matplotlib>=3.7",
+    "rapidfuzz>=3.0",
+    "requests>=2.28",
+    "pyarrow>=12.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["sigvigil*"]
