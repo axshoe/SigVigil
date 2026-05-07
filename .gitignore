@@ -7,3 +7,8 @@ __pycache__/
 .pytest_cache/
 *.parquet
 *.zip
+.idea/
+**/SETUP.md
+.DS_Store
+__pycache__/
+*.pyc
