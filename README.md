@@ -2,13 +2,13 @@
 
 **Systematic pharmacovigilance signal analysis of migraine preventives in adolescent females.**
 
-SigVigil is the third project in the [Migraine Stratification Outcomes Framework (MSOF)](https://thexiulab.org) at The Xiu Lab. MSOF is a four-project computational pipeline spanning genetic variant annotation (ChanVar), phenotypic clustering (TraitStrata), pharmacovigilance signal detection (SigVigil), and adverse effect trajectory modeling (NeuroTrack).
+SigVigil is the third project in the [Migraine Stratification Outcomes Framework (MiSOF)](https://thexiulab.org) at The Xiu Lab. MSOF is a four-project computational pipeline spanning genetic variant annotation (ChanVar), phenotypic clustering (TraitStrata), pharmacovigilance signal detection (SigVigil), and adverse effect trajectory modeling (NeuroTrack).
 
 SigVigil implements ROR, IC, PRR, and EBGM from first principles — no proprietary pharmacovigilance software, no black-box wrappers — and adds a stratified comparison layer that quantifies how adverse event signals differ in adolescent females relative to the general FAERS population on the same drugs. The first open-source, reproducible, multi-drug comparative pharmacovigilance analysis for this population.
 
 ---
 
-## MSOF Pipeline Position
+## MiSOF Pipeline Position
 
 ```
 ChanVar ──► TraitStrata ──► SigVigil ──► NeuroTrack
@@ -122,7 +122,7 @@ FAERS is subject to under-reporting, notoriety bias, Weber effect, confounding b
 
 ---
 
-## Part of MSOF
+## Part of MiSOF
 
 - **ChanVar** — `github.com/axshoe/chanvar` — CACNA1A variant annotation
 - **TraitStrata** — `github.com/axshoe/traitstrata` — Phenotypic clustering
